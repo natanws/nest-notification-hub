@@ -19,3 +19,17 @@ services:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       retries: 10
+  app:
+    build: .
+    profiles: ['app']
+    environment:
+      DATABASE_URL: postgresql://hub:hub@postgres:5432/notification_hub?schema=public
+      REDIS_URL: redis://redis:6379
+      WEBHOOK_SIGNING_SECRET: change-me
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

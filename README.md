@@ -6,8 +6,6 @@ Clients send a notification request once; the service stores it, queues it, and 
 asynchronously through a channel (webhook, email, WhatsApp sandbox), retrying with exponential
 backoff and parking messages that keep failing in a dead-letter queue.
 
-> Status: work in progress. This README tracks what is already implemented.
-
 ## Why this project
 
 Delivering messages to third parties is a classic source of production incidents: slow providers,
@@ -85,6 +83,23 @@ Email and WhatsApp use **sandbox providers** that only log. They implement the s
   in a header: receivers should deduplicate on it.
 - **Sweeper instead of a transactional outbox.** The outbox pattern would remove the gap between
   the INSERT and the enqueue entirely; the sweeper is simpler and good enough for this scope.
+
+## Observability
+
+| Endpoint | What |
+| --- | --- |
+| `GET /health` | Readiness: checks PostgreSQL and Redis, `503` if either is down |
+| `GET /metrics` | Prometheus: `notification_deliveries_total{channel,result}`, `notification_delivery_duration_seconds`, Node.js defaults |
+| `GET /docs` | OpenAPI (Swagger UI) |
+
+Useful alerts from these metrics: rate of `result="dead_lettered"` above zero, and p95 delivery
+duration approaching the timeout (receivers getting slow before they fail).
+
+## Run with Docker
+
+```bash
+docker compose --profile app up --build   # PostgreSQL + Redis + the service on :3000
+```
 
 ## Development workflow
 
