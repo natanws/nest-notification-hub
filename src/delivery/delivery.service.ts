@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Channel, NotificationStatus } from '@prisma/client';
+import { MetricsService } from '../metrics/metrics.service';
 import { NotificationsRepository } from '../notifications/notifications.repository';
 import { DeliveryQueueService } from '../queue/delivery-queue.service';
 import { CHANNEL_PROVIDERS, ChannelProvider, PermanentDeliveryError } from './channels/channel';
@@ -23,6 +24,7 @@ export class DeliveryService {
     private readonly repository: NotificationsRepository,
     private readonly queue: DeliveryQueueService,
     @Inject(CHANNEL_PROVIDERS) providers: ChannelProvider[],
+    private readonly metrics: MetricsService,
   ) {
     this.providers = new Map(providers.map((provider) => [provider.channel, provider]));
   }
@@ -46,9 +48,11 @@ export class DeliveryService {
 
     try {
       await provider.deliver(notification);
+      const durationMs = Date.now() - startedAt;
+      this.metrics.recordDelivery(notification.channel, 'delivered', durationMs);
       await this.repository.recordAttempt(notification, {
         success: true,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         nextStatus: NotificationStatus.DELIVERED,
       });
       return { kind: 'delivered' };
@@ -56,11 +60,17 @@ export class DeliveryService {
       const error = caught instanceof Error ? caught.message : String(caught);
       const permanent = caught instanceof PermanentDeliveryError;
       const giveUp = permanent || isLastAttempt;
+      const durationMs = Date.now() - startedAt;
+      this.metrics.recordDelivery(
+        notification.channel,
+        giveUp ? 'dead_lettered' : 'retry',
+        durationMs,
+      );
 
       const updated = await this.repository.recordAttempt(notification, {
         success: false,
         error,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         nextStatus: giveUp ? NotificationStatus.DEAD_LETTERED : NotificationStatus.FAILED,
       });
 
