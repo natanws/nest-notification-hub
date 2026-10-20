@@ -1,5 +1,17 @@
-import { Body, Controller, Get, HttpStatus, Param, ParseUUIDPipe, Post, Res } from '@nestjs/common';
-import { DeliveryAttempt } from '@prisma/client';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseEnumPipe,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
+import { DeliveryAttempt, NotificationStatus } from '@prisma/client';
 import { Response } from 'express';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { IdempotencyKey } from './idempotency-key.decorator';
@@ -20,6 +32,20 @@ export class NotificationsController {
     const { notification, created } = await this.notifications.create(key, dto);
     res.status(created ? HttpStatus.ACCEPTED : HttpStatus.OK);
     return toResponse(notification);
+  }
+
+  /** e.g. GET /notifications?status=DEAD_LETTERED lists the dead-letter queue (latest 50). */
+  @Get()
+  async list(
+    @Query('status', new ParseEnumPipe(NotificationStatus)) status: NotificationStatus,
+  ): Promise<NotificationResponse[]> {
+    return (await this.notifications.listByStatus(status)).map(toResponse);
+  }
+
+  @Post(':id/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retry(@Param('id', ParseUUIDPipe) id: string): Promise<NotificationResponse> {
+    return toResponse(await this.notifications.retry(id));
   }
 
   @Get(':id')

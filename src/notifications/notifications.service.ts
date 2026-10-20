@@ -1,5 +1,6 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { DeliveryAttempt, Notification, Prisma } from '@prisma/client';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { DeliveryAttempt, Notification, NotificationStatus, Prisma } from '@prisma/client';
+import { DeliveryQueueService } from '../queue/delivery-queue.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { isUniqueViolation, NotificationsRepository } from './notifications.repository';
 import { hashRequest } from './request-hash';
@@ -12,7 +13,12 @@ export interface CreateResult {
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly repository: NotificationsRepository) {}
+  private readonly logger = new Logger(NotificationsService.name);
+
+  constructor(
+    private readonly repository: NotificationsRepository,
+    private readonly queue: DeliveryQueueService,
+  ) {}
 
   /**
    * Creates a notification exactly once per idempotency key.
@@ -36,6 +42,7 @@ export class NotificationsService {
         recipient: dto.recipient,
         payload: dto.payload as Prisma.InputJsonValue,
       });
+      await this.enqueueSafely(notification.id);
       return { notification, created: true };
     } catch (error) {
       // Two concurrent requests with the same key: the unique index lets only one insert win.
@@ -55,6 +62,35 @@ export class NotificationsService {
   async findAttempts(id: string): Promise<DeliveryAttempt[]> {
     await this.findOne(id);
     return this.repository.findAttempts(id);
+  }
+
+  listByStatus(status: NotificationStatus): Promise<Notification[]> {
+    return this.repository.findByStatus(status);
+  }
+
+  /** Sends a dead-lettered notification through the queue again (e.g. after fixing the receiver). */
+  async retry(id: string): Promise<Notification> {
+    await this.findOne(id);
+    if (!(await this.repository.resetDeadLettered(id))) {
+      throw new ConflictException('Only dead-lettered notifications can be retried');
+    }
+    // A fresh job id: the original job is kept in the failed set for inspection.
+    await this.queue.enqueue(id, `${id}-retry-${Date.now()}`);
+    return this.findOne(id);
+  }
+
+  /**
+   * The row is already committed, so a Redis outage must not turn this into a 500 (the client
+   * would retry and get a replay anyway). The pending sweeper re-enqueues it later.
+   */
+  private async enqueueSafely(id: string): Promise<void> {
+    try {
+      await this.queue.enqueue(id);
+    } catch (error) {
+      this.logger.error(
+        `Could not enqueue ${id}, the sweeper will retry: ${(error as Error).message}`,
+      );
+    }
   }
 
   private assertSameRequest(notification: Notification, requestHash: string): Notification {
