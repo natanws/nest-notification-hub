@@ -1,6 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Channel, Notification, Prisma } from '@prisma/client';
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { DeliveryQueueService } from '../queue/delivery-queue.service';
 import { NotificationsRepository } from './notifications.repository';
 import { NotificationsService } from './notifications.service';
 import { hashRequest } from './request-hash';
@@ -38,6 +39,7 @@ function uniqueViolation(): Prisma.PrismaClientKnownRequestError {
 
 describe('NotificationsService', () => {
   let repository: jest.Mocked<NotificationsRepository>;
+  let queue: jest.Mocked<DeliveryQueueService>;
   let service: NotificationsService;
 
   beforeEach(() => {
@@ -46,8 +48,11 @@ describe('NotificationsService', () => {
       findByIdempotencyKey: jest.fn(),
       create: jest.fn(),
       findAttempts: jest.fn(),
+      findByStatus: jest.fn(),
+      resetDeadLettered: jest.fn(),
     } as unknown as jest.Mocked<NotificationsRepository>;
-    service = new NotificationsService(repository);
+    queue = { enqueue: jest.fn() } as unknown as jest.Mocked<DeliveryQueueService>;
+    service = new NotificationsService(repository, queue);
   });
 
   describe('create', () => {
@@ -61,6 +66,17 @@ describe('NotificationsService', () => {
       expect(repository.create).toHaveBeenCalledWith(
         expect.objectContaining({ idempotencyKey: 'order-42-created', channel: Channel.WEBHOOK }),
       );
+      expect(queue.enqueue).toHaveBeenCalledWith(result.notification.id);
+    });
+
+    it('still accepts the notification when the queue is unavailable', async () => {
+      repository.findByIdempotencyKey.mockResolvedValue(null);
+      repository.create.mockResolvedValue(notification());
+      queue.enqueue.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(service.create('order-42-created', dto)).resolves.toMatchObject({
+        created: true,
+      });
     });
 
     it('returns the stored notification when the same request is replayed', async () => {
@@ -71,6 +87,7 @@ describe('NotificationsService', () => {
 
       expect(result).toEqual({ notification: stored, created: false });
       expect(repository.create).not.toHaveBeenCalled();
+      expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
     it('rejects a reused key with a different body', async () => {
@@ -114,6 +131,30 @@ describe('NotificationsService', () => {
       await expect(service.findAttempts('7f1c1e0e-0000-4000-8000-000000000001')).resolves.toEqual(
         [],
       );
+    });
+  });
+
+  describe('retry', () => {
+    it('re-enqueues a dead-lettered notification with a fresh job id', async () => {
+      repository.findById.mockResolvedValue(notification({ status: 'DEAD_LETTERED' }));
+      repository.resetDeadLettered.mockResolvedValue(true);
+
+      await service.retry('7f1c1e0e-0000-4000-8000-000000000001');
+
+      expect(queue.enqueue).toHaveBeenCalledWith(
+        '7f1c1e0e-0000-4000-8000-000000000001',
+        expect.stringMatching(/-retry-\d+$/),
+      );
+    });
+
+    it('refuses to retry a notification that is not dead-lettered', async () => {
+      repository.findById.mockResolvedValue(notification({ status: 'DELIVERED' }));
+      repository.resetDeadLettered.mockResolvedValue(false);
+
+      await expect(service.retry('7f1c1e0e-0000-4000-8000-000000000001')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(queue.enqueue).not.toHaveBeenCalled();
     });
   });
 });
