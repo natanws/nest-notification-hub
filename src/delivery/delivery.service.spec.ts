@@ -1,5 +1,6 @@
 import { Channel, Notification, NotificationStatus } from '@prisma/client';
 import { NotificationsRepository } from '../notifications/notifications.repository';
+import { MetricsService } from '../metrics/metrics.service';
 import { DeliveryQueueService } from '../queue/delivery-queue.service';
 import { ChannelProvider, PermanentDeliveryError } from './channels/channel';
 import { DeliveryService } from './delivery.service';
@@ -28,6 +29,7 @@ describe('DeliveryService', () => {
   let repository: jest.Mocked<NotificationsRepository>;
   let queue: jest.Mocked<DeliveryQueueService>;
   let webhook: jest.Mocked<ChannelProvider>;
+  let metrics: jest.Mocked<MetricsService>;
   let service: DeliveryService;
 
   beforeEach(() => {
@@ -38,13 +40,19 @@ describe('DeliveryService', () => {
     } as unknown as jest.Mocked<NotificationsRepository>;
     queue = { deadLetter: jest.fn() } as unknown as jest.Mocked<DeliveryQueueService>;
     webhook = { channel: Channel.WEBHOOK, deliver: jest.fn() };
-    service = new DeliveryService(repository, queue, [webhook]);
+    metrics = { recordDelivery: jest.fn() } as unknown as jest.Mocked<MetricsService>;
+    service = new DeliveryService(repository, queue, [webhook], metrics);
   });
 
   it('marks the notification as delivered when the channel succeeds', async () => {
     webhook.deliver.mockResolvedValue();
 
     await expect(service.deliver(ID, false)).resolves.toEqual({ kind: 'delivered' });
+    expect(metrics.recordDelivery).toHaveBeenCalledWith(
+      Channel.WEBHOOK,
+      'delivered',
+      expect.any(Number),
+    );
     expect(repository.recordAttempt).toHaveBeenCalledWith(
       expect.objectContaining({ id: ID }),
       expect.objectContaining({ success: true, nextStatus: NotificationStatus.DELIVERED }),
