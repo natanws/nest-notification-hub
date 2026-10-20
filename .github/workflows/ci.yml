@@ -42,8 +42,18 @@ jobs:
           --health-cmd "pg_isready -U hub"
           --health-interval 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://hub:hub@localhost:5432/notification_hub?schema=public
+      REDIS_URL: redis://localhost:6379
+      WEBHOOK_SIGNING_SECRET: ci-secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
