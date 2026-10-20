@@ -9,6 +9,8 @@ async function bootstrap(): Promise<void> {
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
   app.enableShutdownHooks();
+  // Comma-separated allow-list, e.g. the operations console at http://localhost:5173.
+  app.enableCors({ origin: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',') });
 
   const openApi = new DocumentBuilder()
     .setTitle('nest-notification-hub')
