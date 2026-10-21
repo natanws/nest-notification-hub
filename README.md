@@ -95,6 +95,12 @@ Email and WhatsApp use **sandbox providers** that only log. They implement the s
 Useful alerts from these metrics: rate of `result="dead_lettered"` above zero, and p95 delivery
 duration approaching the timeout (receivers getting slow before they fail).
 
+## Operations console
+
+[react-notification-console](https://github.com/natanws/react-notification-console) is a React UI
+for this API (list by status, attempt timeline, retry dead letters). Allowed origins are set with
+`CORS_ORIGINS` (default `http://localhost:5173`).
+
 ## Run with Docker
 
 ```bash
